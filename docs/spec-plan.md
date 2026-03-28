@@ -77,42 +77,149 @@ Build a single-user Runbook + Todo manager for engineers performing repeatable o
 ### Phase 1: Copilot Agent Skill Preparation
 > Set up AI-assisted development guardrails after the repos and workspace exist
 
-**1A — Evaluate & Install Existing Skills**
+Phase 1 should produce a deliberate, layered skill stack rather than a large collection of overlapping instructions:
+- External skills provide framework defaults, modern patterns, and common troubleshooting guidance.
+- Repo-local skills provide project-specific policy, constraints, and implementation standards for this app.
+- Deferred and rejected skills should stay documented so the toolchain does not drift over time.
+
+**1A — Install Recommended External Skills**
 
 | # | Task | Details |
 |---|------|---------|
 | 1A.1 | Install `web-design-guidelines` | `npx skills add vercel-labs/agent-skills --skill web-design-guidelines`. Audits UI code against Vercel's Web Interface Guidelines (191K installs, security PASS). Use for reviewing Angular component templates for accessibility, layout, and UX compliance. |
 | 1A.2 | Install `tdd` | `npx skills add mattpocock/skills --skill tdd`. TDD with vertical slices and behavior-focused testing (6.9K installs, all security audits PASS). Framework-agnostic — works for both Jest/NestJS and Angular TestBed tests. |
-| 1A.3 | Evaluate `ui-ux-pro-max` rules (DO NOT INSTALL) | `nextlevelbuilder/ui-ux-pro-max-skill` has excellent UX rules (99 guidelines, 10 priority categories) BUT: **fails Gen Agent Trust Hub security audit** and is React Native-focused. Extract useful rules (accessibility, forms, navigation, animation) into our custom UI/UX skill instead. |
-| 1A.4 | Skip `frontend-design` | `anthropics/skills/frontend-design` is too creative/avant-garde for a developer productivity tool. We need consistency and usability, not "unforgettable" aesthetics. |
-| 1A.5 | Skip `webapp-testing` | `anthropics/skills/webapp-testing` is Python Playwright E2E only — not relevant for Jest unit/integration testing. |
+| 1A.3 | Install `angular-component` | `npx skills add https://github.com/analogjs/angular-skills --skill angular-component`. Use as the primary Angular UI implementation baseline for standalone components, signal inputs/outputs, modern control flow, OnPush patterns, and accessibility-first templates. |
+| 1A.4 | Install `angular-signals` | `npx skills add https://github.com/analogjs/angular-skills --skill angular-signals`. Use as the reactive state companion for component-local and service-level signal patterns, computed state, effects, and RxJS interop. |
+| 1A.5 | Install `angular-testing` | `npx skills add https://github.com/analogjs/angular-skills --skill angular-testing`. Use as the Angular-specific testing companion for standalone components, signal-based state, HttpClient testing, and modern TestBed patterns. |
+| 1A.6 | Defer `angular-routing` and `angular-http` | `analogjs/angular-skills:angular-routing` and `analogjs/angular-skills:angular-http` are strong fits, but can be installed when frontend implementation begins in Phases 6-10. Their patterns should still inform the custom Angular skill research. |
+| 1A.7 | Skip `angular-forms` for V1 | `analogjs/angular-skills:angular-forms` is built around Angular Signal Forms, which are experimental in Angular v21+. This project is targeting Angular 19 and should standardize on typed reactive forms instead. |
+| 1A.8 | Skip `angular-best-practices` | `sajeetharan/angular-agent-kit:angular-best-practices` has some useful performance rules, but it has very low adoption, a Gen Agent Trust Hub WARN result, and overlaps with the selected AnalogJS skills plus the planned custom Angular skill. |
+| 1A.9 | Skip `angular-enterprise-ui` | `josegusnay/angular-enterprise-skills:angular-enterprise-ui` is too prescriptive for this app's direction: strict SCSS/BEM, atomic design categorization, and rigid UI-layer separation conflict with the planned Tailwind + headless component approach. |
+| 1A.10 | Skip `angular-material-cdk-animations` for now | `7spade/black-tortoise:angular-material-cdk-animations` is useful when a project is explicitly Material/CDK-led, but this app is not committing to Angular Material as the primary UI system. Revisit only if the frontend becomes Material-heavy. |
+| 1A.11 | Install `nestjs-best-practices` | `npx skills add https://github.com/kadajett/agent-nestjs-skills --skill nestjs-best-practices`. Use as the primary NestJS architectural guardrail. Strong coverage across feature modules, dependency injection, exception handling, security, performance, testing, database/ORM, API design, and deployment practices. |
+| 1A.12 | Install `nestjs-expert` | `npx skills add https://github.com/sickn33/antigravity-awesome-skills --skill nestjs-expert`. Use as the practical troubleshooting companion for NestJS dependency injection failures, circular dependencies, request lifecycle issues, TypeORM integration errors, Jest/Supertest setup, and other real-world framework pitfalls. |
+| 1A.13 | Evaluate `nestjs-expert` from `jeffallan/claude-skills` (DO NOT INSTALL) | Good scaffolding-oriented guidance for controllers, services, DTOs, Swagger decorators, and basic tests, but overlaps heavily with the two selected NestJS skills and adds less unique value for this project. |
+| 1A.14 | Skip `developer-kit/nestjs` | `giuseppe-trisciuoglio/developer-kit:nestjs` is Drizzle ORM-centered. Since this project standardizes on TypeORM + SQLite, installing it would bias generation toward the wrong database patterns, migration workflow, and repository structure. |
+| 1A.15 | Evaluate `ui-ux-pro-max` rules (DO NOT INSTALL) | `nextlevelbuilder/ui-ux-pro-max-skill` has excellent UX rules (99 guidelines, 10 priority categories) BUT: **fails Gen Agent Trust Hub security audit** and is React Native-focused. Extract useful rules (accessibility, forms, navigation, animation) into our custom UI/UX skill instead. |
+| 1A.16 | Skip `frontend-design` | `anthropics/skills/frontend-design` is too creative/avant-garde for a developer productivity tool. We need consistency and usability, not "unforgettable" aesthetics. |
+| 1A.17 | Skip `webapp-testing` | `anthropics/skills/webapp-testing` is Python Playwright E2E only — not relevant for Jest unit/integration testing. |
+
+**Phase 1A Install Commands**
+
+Run these once the frontend and backend repos exist:
+
+```bash
+# Shared foundation skills
+npx skills add vercel-labs/agent-skills --skill web-design-guidelines
+npx skills add mattpocock/skills --skill tdd
+
+# Angular skills
+npx skills add https://github.com/analogjs/angular-skills --skill angular-component
+npx skills add https://github.com/analogjs/angular-skills --skill angular-signals
+npx skills add https://github.com/analogjs/angular-skills --skill angular-testing
+
+# NestJS skills
+npx skills add https://github.com/kadajett/agent-nestjs-skills --skill nestjs-best-practices
+npx skills add https://github.com/sickn33/antigravity-awesome-skills --skill nestjs-expert
+```
+
+Optional later, when frontend implementation reaches routing and data-access work in Phases 6-10:
+
+```bash
+npx skills add https://github.com/analogjs/angular-skills --skill angular-routing
+npx skills add https://github.com/analogjs/angular-skills --skill angular-http
+```
 
 **1B — Create Custom Angular 19 Skill (single monolithic SKILL.md)**
 
 | # | Task | Details |
 |---|------|---------|
-| 1B.1 | Research Angular 19 best practices | Gather official Angular guidelines: standalone components (no NgModules), signals & computed signals, new control flow (`@if`, `@for`, `@switch`), `inject()` over constructor DI, `input()`/`output()`/`model()` signal APIs, zoneless change detection, functional guards/resolvers, typed reactive forms, `HttpClient` with `withFetch()`. |
-| 1B.2 | Create `angular-19-best-practices` SKILL.md | Custom skill covering: project structure conventions, component patterns (standalone, signals, OnPush), routing patterns (lazy loading, functional guards), service patterns (inject(), HttpClient), template patterns (new control flow, ngx-markdown integration), testing patterns (TestBed with standalone, component harnesses), Angular CDK usage (drag-drop, a11y). Install into frontend repo `.copilot/skills/`. |
+| 1B.1 | Research Angular 19 best practices | Gather official Angular guidelines and compare them against the installed external Angular skills (`angular-component`, `angular-signals`, `angular-testing`) so the custom skill only captures project-specific policy, Angular 19 constraints, and any deliberate deviations from those external defaults. |
+| 1B.2 | Create `angular-19-best-practices` SKILL.md | Create a repo-local Angular policy skill that references the installed external Angular skills as the default baseline and only owns project-specific guidance: frontend folder structure, Angular 19 constraints, typed reactive forms over Signal Forms, route layout for `/today`, `/runs`, `/templates`, and `/todos`, `ngx-markdown` integration, Tailwind + headless component conventions, Angular CDK drag-drop usage, API service structure, dashboard/run/todo UI patterns, and app-specific accessibility and testing expectations. Install into frontend repo `.copilot/skills/`. |
 
 **1C — Create Custom NestJS Skill (single monolithic SKILL.md)**
 
 | # | Task | Details |
 |---|------|---------|
-| 1C.1 | Research NestJS best practices | Gather official NestJS patterns: module organization, controller/service separation, DTOs with class-validator, TypeORM entity patterns, repository pattern, exception filters, pipes for validation, interceptors, testing with @nestjs/testing (createTestingModule, overrideProvider), SQLite-specific patterns, migration strategies. |
-| 1C.2 | Create `nestjs-best-practices` SKILL.md | Custom skill covering: module structure (feature modules), entity definitions (TypeORM decorators), service layer patterns, controller patterns (decorators, response types), DTO validation (class-validator + class-transformer), error handling (built-in exception filters), testing patterns (unit tests with mocked services, integration tests with test database), migration workflow, SQLite considerations. Install into backend repo `.copilot/skills/`. |
+| 1C.1 | Research NestJS best practices | Gather official NestJS patterns and compare them against the installed external NestJS skills (`nestjs-best-practices`, `nestjs-expert`) so the custom skill focuses on project-specific architecture, data modeling, and workflow rules instead of restating generic NestJS guidance. |
+| 1C.2 | Create `nestjs-best-practices` SKILL.md | Create a repo-local NestJS policy skill that references the installed external NestJS skills as the default baseline and only owns project-specific guidance: feature module boundaries for templates, template steps, instances, instance steps, todos, and dashboard; TypeORM + SQLite conventions; migration workflow; transactional instance creation; gap-based step ordering and rebalancing; `next_step_id` handling; instance status lifecycle; delete semantics; NestJS error response expectations; Swagger/code-first API conventions; and backend testing expectations for Jest, Supertest, and test-database setup. Install into backend repo `.copilot/skills/`. |
 
 **1D — Create Custom UI/UX Skill (Project-Specific)**
 
 | # | Task | Details |
 |---|------|---------|
-| 1D.1 | Extract rules from ui-ux-pro-max | Cherry-pick the web-relevant rules from ui-ux-pro-max's Quick Reference: Accessibility (CRITICAL), Layout & Responsive (HIGH), Typography & Color (MEDIUM), Animation (MEDIUM), Forms & Feedback (MEDIUM), Navigation Patterns (HIGH). Strip React Native-specific rules. |
-| 1D.2 | Create `ui-ux-guidelines` SKILL.md | Custom skill combining: extracted rules from ui-ux-pro-max (adapted for web/Angular), Tailwind CSS patterns, Angular Material/CDK component guidelines, project-specific design tokens (colors, spacing, typography), dark/light mode approach, component patterns for this app (step cards, progress bars, checklists, markdown previews), accessibility checklist. Install into frontend repo `.copilot/skills/`. |
+| 1D.1 | Extract rules from ui-ux-pro-max | Cherry-pick only the web-relevant, security-safe rules from ui-ux-pro-max's Quick Reference and reconcile them with `web-design-guidelines` so the custom UI/UX skill captures project-specific UX policy instead of duplicating generic accessibility and layout advice. Keep Accessibility (CRITICAL), Layout & Responsive (HIGH), Forms & Feedback (MEDIUM), Navigation Patterns (HIGH), Typography & Color (MEDIUM), and Animation (MEDIUM); strip React Native-specific guidance. |
+| 1D.2 | Create `ui-ux-guidelines` SKILL.md | Create a repo-local UI policy skill that uses `web-design-guidelines` as the baseline and only owns project-specific frontend guidance: Tailwind + headless component conventions, design tokens, responsive shell/navigation patterns, markdown rendering and code block presentation, drag-drop affordances for step reordering, form UX for dynamic run variables and todos, progress and empty-state patterns, confirmation and destructive-action patterns, reduced-motion guidance, and an accessibility checklist tuned for a keyboard-friendly engineer productivity tool. Install into frontend repo `.copilot/skills/`. |
 
 **1E — Create Custom Testing Skill (Supplement TDD Skill)**
 
 | # | Task | Details |
 |---|------|---------|
-| 1E.1 | Create `testing-guidelines` SKILL.md | Supplement the `tdd` skill with project-specific testing guidance: Jest configuration for NestJS (supertest for integration tests, in-memory SQLite for test DB), Angular TestBed patterns (standalone component testing, HttpClientTestingModule, RouterTestingModule), test file naming conventions, test data factories, what to test vs what to skip, coverage expectations. Install into both repos' `.copilot/skills/`. |
+| 1E.1 | Create `testing-guidelines` SKILL.md | Create a repo-local testing policy skill that supplements `tdd`, `angular-testing`, and the installed NestJS skills rather than duplicating them. It should own project-specific testing guidance: test pyramid for this app, vertical-slice priorities by phase, Jest/Supertest setup for NestJS, SQLite test-database strategy, Angular standalone component and service test conventions, API contract verification, test data builders/factories, naming and file placement conventions, minimum coverage expectations, and clear rules for what to test aggressively vs. what to leave to lower-level framework coverage. Install into both repos' `.copilot/skills/`. |
+
+**Phase 1 Custom Skill Outlines**
+
+These outlines define what each repo-local `SKILL.md` should contain so authoring can begin without another architecture pass.
+
+**Angular 19 Skill Outline**
+
+- Purpose and scope: explain that the skill supplements `angular-component`, `angular-signals`, and `angular-testing` and only governs Angular 19 project policy for this app
+- When to use: creating pages, shared components, API services, route configuration, typed forms, markdown rendering, and drag-drop checklist UI
+- Project structure: `pages/`, `services/`, `shared/`, route ownership, and file placement expectations
+- Component conventions: standalone components, signal inputs/outputs, OnPush by default, control flow syntax, and when to split container vs. presentational responsibilities
+- State conventions: where to use signals, where to keep RxJS, how to expose read-only state from services, and how to model transient UI state
+- Forms conventions: typed reactive forms for dynamic run variables and todo editing, validation display rules, and when not to introduce experimental Signal Forms
+- Routing conventions: page route map, lazy loading expectations, route param handling, and navigation patterns for `/today`, `/runs`, `/templates`, and `/todos`
+- Data-access conventions: `HttpClient` service layer boundaries, DTO typing from backend contracts, loading/error state patterns, and refresh behavior after mutations
+- Markdown and checklist conventions: `ngx-markdown` usage, code block rendering, copy-button integration, and safe presentation of operational instructions
+- CDK and interaction conventions: drag-drop rules for step reordering, keyboard support, focus management, and empty/loading/error state patterns
+- Testing conventions: what Angular tests must prove, preferred TestBed patterns, and what should be covered by the shared testing skill instead
+- Anti-patterns: overusing RxJS for local state, mixing business logic into presentational components, adopting Angular 20+ only APIs without verification, and styling drift away from project UI rules
+- Definition of done: checklist for accessibility, responsiveness, state handling, route behavior, and test coverage
+
+**NestJS Skill Outline**
+
+- Purpose and scope: explain that the skill supplements `nestjs-best-practices` and `nestjs-expert` and only governs project-specific backend policy
+- When to use: creating modules, entities, DTOs, services, controllers, migrations, and transactional workflows
+- Module map: `template`, `template-step`, `instance`, `instance-step`, `todo`, and `dashboard`, plus how responsibilities are divided across controller/service/entity layers
+- Data model conventions: TypeORM entity style, naming, timestamps, relations, enums, and SQLite-specific considerations
+- DTO and validation conventions: request DTO boundaries, `class-validator` usage, response shaping expectations, and when to separate create/update/move DTOs
+- Service-layer rules: transaction boundaries, repository usage, business-rule ownership, and where lifecycle recalculation logic must live
+- Project-specific workflow rules: template step ordering, gap rebalance strategy, transactional instance creation, variable extraction/rendering, `next_step_id` updates, completion toggling, and status transitions
+- Delete and lifecycle semantics: cascade rules, template deletion behavior with historical instances, and how completed/abandoned instances are represented
+- API conventions: route layout, code-first Swagger expectations, standard NestJS error responses, and dashboard aggregation shape
+- Testing conventions: unit vs. integration split, SQLite test-database usage, Supertest expectations, and the minimum coverage required for workflow-heavy services
+- Anti-patterns: leaking ORM entities directly to clients without intent, pushing workflow logic into controllers, using ad hoc SQL when TypeORM patterns suffice, and bypassing transactions for multi-step mutations
+- Definition of done: checklist for validation, transactions, error handling, migration readiness, and test coverage
+
+**UI/UX Skill Outline**
+
+- Purpose and scope: explain that the skill supplements `web-design-guidelines` and only governs this app's visual system and productivity-tool interaction model
+- Design principles: calm, dense-but-readable productivity UI, strong information hierarchy, minimal friction, and explicit action feedback
+- Visual system: color tokens, spacing scale, typography rules, surface hierarchy, icon usage, and treatment of success/warning/destructive states
+- Shell and navigation: responsive app shell, primary nav behavior, active-state treatment, and layout expectations across desktop and smaller screens
+- Page patterns: Today dashboard cards, run execution flow, template editor layout, and todo list behavior
+- Forms and feedback: inline validation, confirmation rules, destructive actions, optimistic vs. confirmed updates, and toast/banner usage
+- Markdown presentation: readable instruction blocks, code fences, copy affordances, callout styling, and overflow handling
+- Checklist and drag-drop behavior: clear affordances, non-ornamental motion, reorder feedback, and accessible alternatives to pointer-only interactions
+- Accessibility rules: keyboard-first operation, focus order, visible focus, contrast, reduced motion, semantic structure, and screen-reader expectations
+- Motion rules: where motion is useful, where it is noise, and how `prefers-reduced-motion` must be respected
+- Anti-patterns: generic marketing-style UI, over-animated interactions, cramped dense layouts, low-contrast tokens, and destructive actions without confirmation
+- Definition of done: checklist for readability, responsiveness, a11y, motion restraint, and task-flow clarity
+
+**Testing Skill Outline**
+
+- Purpose and scope: explain that the skill supplements `tdd`, `angular-testing`, and the external NestJS skills and only governs project-specific test strategy
+- Testing philosophy: vertical slices first, protect workflow logic over boilerplate, and favor stable high-signal tests over large fragile suites
+- Phase-by-phase priorities: which backend and frontend behaviors must be tested in Phases 2 through 10 and which can wait until smoke testing
+- Backend test strategy: service unit tests, controller/integration tests, SQLite-backed flows, Supertest coverage, and transaction-heavy workflow validation
+- Frontend test strategy: standalone component tests, service tests, interaction tests for runs/templates/todos, and when to avoid over-testing pure framework behavior
+- Contract and integration checks: API contract alignment, DTO assumptions, dashboard aggregation shape, and markdown/rendering expectations that matter to users
+- Test data patterns: builders/factories, fixture organization, deterministic IDs/dates, and reusable sample templates/runs/todos
+- Naming and placement conventions: test file naming, colocated vs. integration test placement, and folder structure for factories/utilities
+- Coverage rules: baseline expectations for critical services and components, and criteria for increasing coverage in workflow-heavy areas
+- Anti-patterns: brittle snapshot-heavy UI tests, full end-to-end coverage for every branch, over-mocked workflow tests, and tests that duplicate Angular or NestJS internals
+- Definition of done: checklist for behavior coverage, fixture clarity, deterministic execution, and maintainability
 
 ### Phase 2: Backend — Templates & Steps
 > Core CRUD for templates and their steps
@@ -270,6 +377,10 @@ Build a single-user Runbook + Todo manager for engineers performing repeatable o
 - **Todos**: Show all incomplete on dashboard (no "today" flag for V1)
 - **Step un-completion**: Supported (toggle, recalculate next_step_id)
 - **Copilot skills**: One monolithic SKILL.md per framework (Angular, NestJS); can split later if too large
+- **Angular external skills**: Install `analogjs/angular-skills:angular-component`, `analogjs/angular-skills:angular-signals`, and `analogjs/angular-skills:angular-testing` as the initial Angular skill set; defer `angular-routing` and `angular-http` until frontend implementation begins; do not install `angular-forms`, `angular-best-practices`, `angular-enterprise-ui`, or `angular-material-cdk-animations` for V1
+- **NestJS external skills**: Install `kadajett/agent-nestjs-skills:nestjs-best-practices` as the primary architectural baseline and `sickn33/antigravity-awesome-skills:nestjs-expert` as the troubleshooting/debugging companion; do not install the `jeffallan/claude-skills:nestjs-expert` or `giuseppe-trisciuoglio/developer-kit:nestjs` skills for V1
+- **UI/UX skill strategy**: Use `web-design-guidelines` as the external baseline for general accessibility, layout, and interaction quality, then keep the custom `ui-ux-guidelines` skill focused on Tailwind + headless patterns, markdown/checklist/runbook-specific UI behavior, and keyboard-first productivity workflows
+- **Testing skill strategy**: Use `tdd` as the cross-stack workflow baseline, `angular-testing` for Angular-specific test implementation patterns, and the custom `testing-guidelines` skill for project-specific test scope, fixtures, SQLite test-database setup, and phase-by-phase coverage priorities
 - **Phase ordering**: Project setup/bootstrap comes before Copilot skill authoring so repo-local skills and workspace guidance target the real project structure
 - **Node version**: Locked via `.nvmrc` in both repos (existing nvm setup)
 - **SonarQube**: Reuse existing local Docker instance; configure SonarLint VS Code extension in connected mode
