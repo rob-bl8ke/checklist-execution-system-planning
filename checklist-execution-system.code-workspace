@@ -1,0 +1,24 @@
+{
+  "folders": [
+    {
+      "name": "planning",
+      "path": "../checklist-execution-system-planning"
+    },
+    {
+      "name": "api",
+      "path": "../checklist-execution-system-api"
+    },
+    {
+      "name": "ui",
+      "path": "../checklist-execution-system-ui"
+    }
+  ],
+  "extensions": {
+    "recommendations": [
+      "sonarsource.sonarlint-vscode",
+      "angular.ng-template",
+      "dbaeumer.vscode-eslint",
+      "esbenp.prettier-vscode"
+    ]
+  }
+}
