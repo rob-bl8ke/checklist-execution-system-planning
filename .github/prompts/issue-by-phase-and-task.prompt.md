@@ -29,7 +29,7 @@ Generate and create one GitHub issue per task from the project planning document
    b. Present the draft to the user for review.
    c. Ask for explicit approval: "Does this look correct? Approve to create this issue on GitHub, or let me know what to change."
    d. Do not create the issue until the user gives explicit approval. If the user requests changes, apply them and re-present the updated draft before asking again.
-   e. Once approved, use the GitHub MCP server to create the issue. If the target repository has not been established in the session, ask the user for it before creating.
+   e. Once approved, create the issue using the GitHub MCP server if it is available. If it is not available, fall back to the `gh` CLI following the GitHub CLI fallback notes and PowerShell command pattern below. If the target repository has not been established in the session, ask the user for it before creating. If a GitHub project has not been established in the session, ask the user whether issues should be added to a project and for the project details before creating.
    f. After the issue is successfully created, report the issue number and URL, then proceed to the next item.
 6. Keep each generated item tightly scoped to one functional unit.
 7. Preserve the original phase/task numbering from the plan.
@@ -46,10 +46,40 @@ Generate and create one GitHub issue per task from the project planning document
 - Only include a `## Visual Aids` section when a diagram would materially improve understanding of the selected item.
 
 ### GitHub issue creation:
-- Use the GitHub MCP server to create each approved issue.
-- Set the issue title to the task title from the plan.
+- Prefer the GitHub MCP server to create issues when it is available.
+- If the GitHub MCP server is not available, fall back to the `gh` CLI using the pattern described in the GitHub CLI fallback notes below.
+- Set the issue title to the task title from the plan only, with no phase or task prefix: `{Title}`.
 - Set the issue body to the full markdown content of the generated issue (all sections from `## Story` onward, excluding the `## Item` header block).
 - After creation, report the issue number and URL before moving to the next item.
+- If the user has indicated that issues should be added to a GitHub project, add each issue to the project after creation. Ask the user for the project number and owner if not already established.
+
+### Repository routing:
+- Ask the user which repository (or repositories) to target if not already established in the session.
+- For multi-repo workspaces, ask the user which repo owns each category of task (e.g. frontend, backend, cross-cutting) before creating the first issue, so routing is consistent for the rest of the session.
+- If the target repository for a specific task is ambiguous, ask a short clarifying question rather than guessing.
+
+### GitHub CLI fallback notes:
+- Use the `gh` CLI only when the GitHub MCP server is not available.
+- When writing an issue body in PowerShell, do not pipe via stdin — it silently fails. Instead write the body to a temp file using `[System.IO.Path]::GetTempFileName() + ".md"` with `Set-Content -Encoding UTF8`, pass the path to `--body-file`, then delete the temp file.
+- `gh issue create` may produce no stdout on success. Always verify with `gh issue list --repo {owner}/{repo} --limit 3` immediately after to confirm creation and obtain the issue number.
+- After creation, always verify the issue body is correct before adding it to a project.
+
+### PowerShell command pattern for gh CLI fallback:
+```powershell
+$body = @'
+{full issue markdown body}
+'@
+$tmpFile = [System.IO.Path]::GetTempFileName() + ".md"
+$body | Set-Content -Path $tmpFile -Encoding UTF8
+gh issue create --repo {owner}/{repo} --title "{title}" --body-file $tmpFile 2>&1
+Remove-Item $tmpFile
+
+# Verify creation and get the issue number
+gh issue list --repo {owner}/{repo} --limit 3 2>&1
+
+# If adding to a project:
+gh project item-add {project-number} --owner {project-owner} --url https://github.com/{owner}/{repo}/issues/{number} 2>&1
+```
 
 ### Diagram rules:
 - After drafting the issue body, decide whether a visual aid would materially reduce ambiguity for that generated item.
@@ -73,6 +103,8 @@ Title: {phase or task title}
 
 ## Short Description
 {A concise paragraph summary of the work}
+
+Linked to: [Phase {N} | Task {N.N}]
 
 ## Acceptance Criteria
 - [ ] {Testable outcome}
