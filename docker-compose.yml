@@ -1,0 +1,24 @@
+services:
+  api:
+    build:
+      context: ../checklist-execution-system-api
+    ports:
+      - "3000:3000"
+    volumes:
+      - db-data:/app/data
+    environment:
+      DB_PATH: /app/data/checklist.db
+      PORT: "3000"
+    restart: unless-stopped
+
+  ui:
+    build:
+      context: ../checklist-execution-system-ui
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  db-data:

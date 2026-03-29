@@ -56,9 +56,11 @@ git clone https://github.com/rob-bl8ke/checklist-execution-system-api
 git clone https://github.com/rob-bl8ke/checklist-execution-system-ui
 ```
 
-From the **parent directory** (where `docker-compose.yml` lives):
+From the **`checklist-execution-system-planning`** directory:
 
 ```bash
+cd checklist-execution-system-planning
+
 # Build images and start all services
 docker compose up --build
 
