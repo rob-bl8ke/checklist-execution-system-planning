@@ -1,12 +1,12 @@
 # Current Specification — Checklist Execution System
 
-> This document reflects the implemented state of the system, including all variable enhancement features (custom delimiters + pipe transforms) built after the initial spec.
+> This document reflects the current agreed specification of the system, including implemented variable enhancement features and the approved reminder system design.
 
 ---
 
 # 1. System Overview
 
-The system is a **Runbook + Todo manager** designed for engineers performing repeatable operational tasks.
+The system is a **Runbook + Reminder + Todo manager** designed for engineers performing repeatable operational tasks.
 
 Examples:
 
@@ -15,16 +15,20 @@ Examples:
 * Release checklists
 * CI/CD runbooks
 * Personal engineering tasks
+* Daily preparation reminders
+* Weekly preparation reminders
+* Sprint ceremony preparation
 
-The system contains **three functional areas**:
+The system contains **four functional areas**:
 
 ```
 Runbooks (Template-based processes)
 Runs (Instances of templates)
-Todos (Standalone tasks)
+Todos (Standalone one-off tasks)
+Reminders (Recurring or one-time advance-notice schedules)
 ```
 
-The **default screen is the "Today" dashboard**, which guides users through the **next step of each runbook** while also displaying todos.
+The **default screen is the "Today" dashboard**, which guides users through the **next step of each runbook** while also displaying reminder occurrences and todos.
 
 ---
 
@@ -117,7 +121,7 @@ Instance steps are **immutable with respect to template changes**. Variable subs
 
 ## 2.5 Todo
 
-Standalone tasks not associated with templates.
+Todos are **standalone one-off tasks** not associated with templates or reminder cadence.
 
 Example:
 
@@ -126,6 +130,65 @@ Upgrade IntelliJ
 Write Kafka article
 Fix CI pipeline
 ```
+
+Todos remain intentionally simple and do not carry recurring schedule semantics in v1.
+
+---
+
+## 2.6 Reminder Definition
+
+A **reminder definition** is a reusable schedule rule for recurring or one-time reminders.
+
+Examples:
+
+```
+Daily standup prep
+Weekly update preparation
+Sprint retrospective preparation
+Sprint planning preparation
+```
+
+A reminder definition contains:
+
+```
+title
+optional description
+optional category
+cadence
+interval
+anchor date
+optional weekdays
+optional time of day
+lead time in days
+optional linked template
+active state
+```
+
+Reminder definitions are used for daily reminders, end-of-week reminders, and sprint ceremonies that should surface in advance.
+
+---
+
+## 2.7 Reminder Occurrence
+
+A **reminder occurrence** is a computed occurrence of a reminder definition for a specific date.
+
+Example:
+
+```
+Sprint retrospective
+Occurs on 2026-04-03
+Becomes visible on 2026-04-01 when leadTimeDays = 2
+```
+
+Occurrence state is applied per occurrence date:
+
+```
+OPEN
+COMPLETED
+DISMISSED
+```
+
+Occurrences are computed for a requested window. Only acted-on occurrences are persisted in the database.
 
 ---
 
@@ -156,6 +219,8 @@ Deployment
 ```
 Docker Compose or local dev
 ```
+
+Reminder visibility is computed on demand from reminder definitions plus occurrence state rather than from a background materialization job.
 
 ---
 
@@ -280,6 +345,62 @@ CREATE TABLE todo (
 
 ---
 
+## 4.6 Reminder Definition Table
+
+```sql
+CREATE TABLE reminder_definition (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    description TEXT,
+    category TEXT,
+    cadence TEXT NOT NULL,
+    interval INTEGER NOT NULL DEFAULT 1,
+    anchor_date DATE NOT NULL,
+    weekdays TEXT,
+    time_of_day TEXT,
+    lead_time_days INTEGER NOT NULL DEFAULT 0,
+    linked_template_id INTEGER,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME,
+
+    FOREIGN KEY(linked_template_id) REFERENCES template(id)
+);
+```
+
+Rules:
+
+* `cadence` is one of `ONCE`, `DAILY`, or `WEEKLY`
+* `interval` is used for daily or weekly frequency spacing
+* `weekdays` is JSON text storing an array of weekday numbers `0-6`
+* `lead_time_days` controls how many days before the occurrence the reminder becomes visible
+* `linked_template_id` is optional and provides a `Start run` entry point instead of automatic run creation
+
+---
+
+## 4.7 Reminder Occurrence State Table
+
+```sql
+CREATE TABLE reminder_occurrence_state (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reminder_id INTEGER NOT NULL,
+    occurrence_date DATE NOT NULL,
+    status TEXT NOT NULL,
+    acted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY(reminder_id) REFERENCES reminder_definition(id),
+    UNIQUE(reminder_id, occurrence_date)
+);
+```
+
+Rules:
+
+* `status` is one of `COMPLETED` or `DISMISSED`
+* absence of a row means the occurrence is still `OPEN`
+* only acted-on occurrences are stored
+
+---
+
 # 5. Template Variable System
 
 ## 5.1 Placeholders
@@ -312,10 +433,10 @@ Placeholders support **pipe-based transforms** applied left-to-right at render t
 
 Syntax: `{{variableName | transform1 | transform2(arg1, arg2)}}`
 
-- The variable name is the first segment (before the first `|`)
-- Transforms are applied sequentially; each receives the output of the previous
-- An unknown transform name leaves the full original placeholder intact (fail-safe)
-- A missing variable with no `default` transform in the chain leaves the placeholder intact
+* The variable name is the first segment (before the first `|`)
+* Transforms are applied sequentially; each receives the output of the previous
+* An unknown transform name leaves the full original placeholder intact (fail-safe)
+* A missing variable with no `default` transform in the chain leaves the placeholder intact
 
 ### Built-in Transforms
 
@@ -346,11 +467,11 @@ Syntax: `{{variableName | transform1 | transform2(arg1, arg2)}}`
 
 ## 5.4 Delimiter Validation Rules
 
-- Both `variablePrefix` and `variableSuffix` must be provided together, or both omitted
-- Neither may be empty when provided
-- Maximum 10 characters each
-- Prefix and suffix must not be identical to each other
-- All regex-special characters in delimiters are escaped before building the extraction/rendering regex
+* Both `variablePrefix` and `variableSuffix` must be provided together, or both omitted
+* Neither may be empty when provided
+* Maximum 10 characters each
+* Prefix and suffix must not be identical to each other
+* All regex-special characters in delimiters are escaped before building the extraction/rendering regex
 
 ---
 
@@ -590,6 +711,173 @@ DELETE /api/todos/{id}
 
 ---
 
+## 6.6 Reminders
+
+### List Reminder Definitions
+
+```
+GET /api/reminders
+```
+
+Query params:
+
+```json
+{
+  "active": true,
+  "linkedTemplateId": 7,
+  "category": "SPRINT_RETRO"
+}
+```
+
+Response items include the stored reminder definition plus derived fields such as `nextOccurrenceDate`, `nextPrepStartDate`, and `lastCompletedOccurrenceDate`.
+
+---
+
+### Get Reminder Definition
+
+```
+GET /api/reminders/{id}
+```
+
+---
+
+### Create Reminder Definition
+
+```
+POST /api/reminders
+```
+
+Body
+
+```json
+{
+  "title": "Sprint retrospective",
+  "description": "Prepare notes and discussion items",
+  "category": "SPRINT_RETRO",
+  "cadence": "WEEKLY",
+  "interval": 2,
+  "anchorDate": "2026-04-03",
+  "weekdays": [5],
+  "timeOfDay": null,
+  "leadTimeDays": 2,
+  "linkedTemplateId": 7
+}
+```
+
+Supported request fields:
+
+```
+title
+description?
+category?
+cadence
+interval?
+anchorDate
+weekdays?
+timeOfDay?
+leadTimeDays?
+linkedTemplateId?
+```
+
+---
+
+### Update Reminder Definition
+
+```
+PUT /api/reminders/{id}
+```
+
+Body fields are the same as Create, plus optional `active`.
+
+---
+
+### Delete Reminder Definition
+
+```
+DELETE /api/reminders/{id}
+```
+
+Deletes the reminder definition and its occurrence state rows.
+
+---
+
+### Agenda Window
+
+```
+GET /api/reminders/agenda?from=YYYY-MM-DD&to=YYYY-MM-DD
+```
+
+Returns computed reminder occurrences for the requested date window.
+
+Response items include:
+
+```
+reminderId
+title
+category
+occurrenceDate
+prepStartDate
+timeOfDay
+status
+isInPrepWindow
+isOverdue
+daysUntilOccurrence
+linkedTemplate
+canStartRun
+```
+
+---
+
+### Update Reminder Occurrence State
+
+```
+PATCH /api/reminders/{id}/occurrences/{occurrenceDate}
+```
+
+Body
+
+```json
+{
+  "status": "COMPLETED"
+}
+```
+
+Supported occurrence state values:
+
+```
+COMPLETED
+DISMISSED
+OPEN
+```
+
+`OPEN` removes any persisted occurrence-state row and restores the default derived state.
+
+---
+
+## 6.7 Dashboard
+
+### Get Today Dashboard
+
+```
+GET /api/dashboard?upcomingDays=7
+```
+
+Response includes:
+
+```
+runs
+todos
+reminders.dueNow
+reminders.upcoming
+```
+
+Semantics:
+
+* `dueNow` contains open reminder occurrences already inside their prep window
+* `upcoming` contains future reminder occurrences inside the requested horizon whose prep window has not started yet
+
+---
+
 # 7. UX Design
 
 ## 7.1 Navigation
@@ -599,6 +887,7 @@ Today
 Runs
 Templates
 Todos
+Reminders
 ```
 
 Default page:
@@ -614,7 +903,11 @@ Today
 Displays:
 
 ```
-Next step of each runbook
+Reminder occurrences ready now
++
+Reminder occurrences coming up soon
++
+Next step of each active runbook
 +
 Todos
 ```
@@ -623,6 +916,14 @@ Example:
 
 ```
 Today
+--------------------------------
+
+🔔 Sprint retrospective
+Occurs Friday
+Visible now because lead time is 2 days
+
+[Done] [Dismiss] [Start run]
+
 --------------------------------
 
 📋 Deploy credit-domain v1.5
@@ -639,6 +940,8 @@ mvn clean package
 ☐ Upgrade IntelliJ
 ☐ Write Kafka article
 ```
+
+Reminder occurrences are shown as occurrence-based items rather than raw schedule definitions.
 
 ---
 
@@ -747,6 +1050,54 @@ Master Todo
 [✔] Fix CI pipeline
 ```
 
+Todos remain one-off tasks and do not double as reminder definitions.
+
+---
+
+## 7.8 Reminders Screen
+
+The Reminders screen manages recurring and one-time reminder definitions.
+
+Layout:
+
+```
+Reminder filters / summary row
+
+Reminder list
+```
+
+Each reminder shows:
+
+```
+title
+cadence summary
+lead time
+next occurrence
+optional linked template
+active state
+```
+
+Primary actions:
+
+```
+Create reminder
+Edit
+Deactivate / Activate
+Delete
+```
+
+The reminder editor includes:
+
+```
+Basics
+Schedule
+Visibility
+Optional runbook link
+Occurrence preview
+```
+
+Ceremony presets such as backlog refinement, retrospective, and sprint planning may prefill reminder definitions but still remain editable before save.
+
 ---
 
 # 8. Markdown Rendering
@@ -784,7 +1135,7 @@ C → copy command
 
 # 10. Performance Considerations
 
-Dashboard optimized via:
+Dashboard run queries remain optimized via:
 
 ```
 instance.next_step_id
@@ -798,6 +1149,16 @@ FROM instance i
 LEFT JOIN instance_step s
 ON s.id = i.next_step_id;
 ```
+
+Reminder visibility is optimized by:
+
+```
+active reminder definitions
+bounded agenda windows
+occurrence-state overlay on computed occurrences
+```
+
+Reminder occurrence computation should be performed only for the requested window, with reasonable bounds such as 7 to 30 days for the dashboard and up to 90 days for agenda queries.
 
 ---
 
@@ -816,15 +1177,20 @@ ON s.id = i.next_step_id;
 | `src/instance/transform-registry.ts` | Registry of built-in transform functions |
 | `src/instance/transform-pipeline.ts` | Parses `varName \| fn1 \| fn2(arg)` and evaluates chain |
 | `src/common/escape-regex.ts` | Escapes regex metacharacters in delimiter strings |
-| `src/database/migrations/` | Includes delimiter column migration |
+| `src/dashboard/dashboard.service.ts` | Aggregates runs, todos, and reminder occurrences for Today |
+| `src/reminder/` | Reminder definition CRUD, recurrence logic, and occurrence state handling |
+| `src/database/migrations/` | Includes delimiter and reminder schema migrations |
 
 ### Frontend (`checklist-execution-system-ui`)
 
 | File | Purpose |
 |---|---|
-| `src/app/models/api.models.ts` | `variablePrefix`/`variableSuffix` on Template and DTOs |
+| `src/app/models/api.models.ts` | Template, dashboard, and reminder API models |
 | `src/app/pages/templates/template-editor/` | Collapsible delimiter configuration UI |
 | `src/app/pages/runs/start-run/start-run.component.ts` | `extractVariables()` with dynamic delimiters and pipe stripping |
+| `src/app/pages/today/today.component.ts` | Displays runs, todos, and reminder occurrences |
+| `src/app/pages/reminders/` | Reminder management list and editor flows |
+| `src/app/components/nav/nav.component.ts` | Navigation entry for Reminders |
 
 ---
 
@@ -833,14 +1199,16 @@ ON s.id = i.next_step_id;
 The system consists of:
 
 ```
-5 database tables (template has 2 additional columns vs initial spec)
-11 REST endpoints
-4 UI pages
+7 database tables
+25 REST endpoints
+5 UI pages
 Guided dashboard workflow
 Template-based runbooks with variables
   - Configurable delimiters per template (default: {{ / }})
   - Pipe transforms applied at render time (upper, lower, replace, default, etc.)
 Standalone todos
+Recurring and one-time reminders with advance notice
+Optional reminder links to templates for runbook-based preparation workflows
 ```
 
 Design goals achieved:
@@ -850,8 +1218,11 @@ fast execution
 minimal complexity
 strong extensibility
 excellent developer usability
-backward compatible (existing templates with default delimiters unchanged)
+backward compatible template variable behavior
+clear separation between one-off todos and recurring reminders
 ```
+
+Reminder delivery in v1 is inside the app. Reminder occurrences do not auto-create run instances; linked templates surface a `Start run` action instead.
 
 ---
 
@@ -860,10 +1231,14 @@ backward compatible (existing templates with default delimiters unchanged)
 Not included but supported by architecture:
 
 ```
+external notifications
+timezone-aware reminder delivery
+calendar sync
+sprint aggregate with generated ceremony reminders
 template versioning
 step dependencies
 automation hooks
-scheduled runbooks
+scheduled runbooks with automatic instance creation
 variable validation rules
 runbook sharing
 attachments
