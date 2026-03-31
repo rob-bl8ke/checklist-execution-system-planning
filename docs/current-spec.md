@@ -355,7 +355,7 @@ CREATE TABLE reminder_definition (
     category TEXT,
     cadence TEXT NOT NULL,
     interval INTEGER NOT NULL DEFAULT 1,
-    anchor_date DATE NOT NULL,
+    anchor_date TEXT NOT NULL,
     weekdays TEXT,
     time_of_day TEXT,
     lead_time_days INTEGER NOT NULL DEFAULT 0,
@@ -371,10 +371,12 @@ CREATE TABLE reminder_definition (
 Rules:
 
 * `cadence` is one of `ONCE`, `DAILY`, or `WEEKLY`
-* `interval` is used for daily or weekly frequency spacing
-* `weekdays` is JSON text storing an array of weekday numbers `0-6`
-* `lead_time_days` controls how many days before the occurrence the reminder becomes visible
+* `interval` is used for daily or weekly frequency spacing; minimum `1`, maximum `52`
+* `weekdays` is JSON text storing an array of weekday numbers `0-6`; use a TypeORM JSON transformer (serialize array to/from `TEXT`) matching the `variables` pattern in `instance.entity.ts`
+* `anchor_date` is stored as `TEXT` in SQLite (`YYYY-MM-DD` format), typed as `string` in the entity, and validated as `@IsDateString()` at the DTO level; it is a local scheduling date, not a UTC timestamp
+* `lead_time_days` controls how many days before the occurrence the reminder becomes visible; minimum `0`, maximum `365`
 * `linked_template_id` is optional and provides a `Start run` entry point instead of automatic run creation
+* `category` is free-text (max 50 chars) rather than an enum, allowing flexible filtering via distinct-value queries
 
 ---
 
@@ -384,11 +386,11 @@ Rules:
 CREATE TABLE reminder_occurrence_state (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     reminder_id INTEGER NOT NULL,
-    occurrence_date DATE NOT NULL,
+    occurrence_date TEXT NOT NULL,
     status TEXT NOT NULL,
     acted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    FOREIGN KEY(reminder_id) REFERENCES reminder_definition(id),
+    FOREIGN KEY(reminder_id) REFERENCES reminder_definition(id) ON DELETE CASCADE,
     UNIQUE(reminder_id, occurrence_date)
 );
 ```
@@ -398,6 +400,8 @@ Rules:
 * `status` is one of `COMPLETED` or `DISMISSED`
 * absence of a row means the occurrence is still `OPEN`
 * only acted-on occurrences are stored
+* `occurrence_date` is stored as `TEXT` (`YYYY-MM-DD`), typed as `string` in the entity
+* `ON DELETE CASCADE` removes occurrence state rows when a reminder definition is deleted, matching the cascade pattern used for `template_step` and `instance_step`
 
 ---
 
@@ -556,6 +560,8 @@ Body fields are the same as Create. To revert to default delimiters, send `varia
 ```
 DELETE /api/templates/{id}
 ```
+
+Returns `409 Conflict` if any active reminder definitions reference the template via `linkedTemplateId`. The error message should identify the blocking reminders. This prevents silent reminder degradation.
 
 ---
 
@@ -729,7 +735,7 @@ Query params:
 }
 ```
 
-Response items include the stored reminder definition plus derived fields such as `nextOccurrenceDate`, `nextPrepStartDate`, and `lastCompletedOccurrenceDate`.
+Response items include the stored reminder definition fields plus derived fields such as `nextOccurrenceDate`, `nextPrepStartDate`, `lastCompletedOccurrenceDate`, `createdAt`, and `updatedAt`.
 
 ---
 
@@ -814,6 +820,7 @@ Response items include:
 ```
 reminderId
 title
+description
 category
 occurrenceDate
 prepStartDate
@@ -825,6 +832,8 @@ daysUntilOccurrence
 linkedTemplate
 canStartRun
 ```
+
+Derived fields (`isInPrepWindow`, `isOverdue`, `daysUntilOccurrence`) are computed on the backend based on the server's current date at response time.
 
 ---
 
@@ -862,6 +871,8 @@ OPEN
 GET /api/dashboard?upcomingDays=7
 ```
 
+`upcomingDays` is optional (default `7`, minimum `1`, maximum `30`). It controls only the reminder upcoming window; runs and todos remain unfiltered.
+
 Response includes:
 
 ```
@@ -873,8 +884,10 @@ reminders.upcoming
 
 Semantics:
 
-* `dueNow` contains open reminder occurrences already inside their prep window
-* `upcoming` contains future reminder occurrences inside the requested horizon whose prep window has not started yet
+* `dueNow` contains open reminder occurrences where `today >= prepStartDate` (i.e. the prep window has started) and the occurrence is still `OPEN`
+* `upcoming` contains future reminder occurrences where `today < prepStartDate` and `occurrenceDate <= today + upcomingDays`
+* `prepStartDate` is always `occurrenceDate - leadTimeDays`
+* When `upcomingDays` is `0`, the `upcoming` array is empty
 
 ---
 
@@ -1158,7 +1171,9 @@ bounded agenda windows
 occurrence-state overlay on computed occurrences
 ```
 
-Reminder occurrence computation should be performed only for the requested window, with reasonable bounds such as 7 to 30 days for the dashboard and up to 90 days for agenda queries.
+Reminder occurrence computation should be performed only for the requested window, with reasonable bounds such as 7 to 30 days for the dashboard and up to 90 days for agenda queries. The recurrence engine must short-circuit once it exceeds the window end date rather than precomputing all possible occurrences then filtering.
+
+The `lastCompletedOccurrenceDate` derived field on reminder list responses should be computed with a single query using `MAX(occurrence_date) WHERE status = 'COMPLETED' GROUP BY reminder_id` to avoid N+1 lookups.
 
 ---
 
@@ -1178,6 +1193,13 @@ Reminder occurrence computation should be performed only for the requested windo
 | `src/instance/transform-pipeline.ts` | Parses `varName \| fn1 \| fn2(arg)` and evaluates chain |
 | `src/common/escape-regex.ts` | Escapes regex metacharacters in delimiter strings |
 | `src/dashboard/dashboard.service.ts` | Aggregates runs, todos, and reminder occurrences for Today |
+| `src/reminder/reminder-definition.entity.ts` | Reminder definition entity with schedule columns |
+| `src/reminder/reminder-occurrence-state.entity.ts` | Per-occurrence state entity (COMPLETED/DISMISSED) |
+| `src/reminder/reminders.controller.ts` | Reminder CRUD, agenda, and occurrence state endpoints |
+| `src/reminder/reminders.service.ts` | Reminder CRUD, occurrence state, and derived field computation |
+| `src/reminder/recurrence.utils.ts` | Pure functions for computing occurrence dates (no DI); independently unit-testable |
+| `src/reminder/dto/` | CreateReminderDto, UpdateReminderDto, UpdateReminderOccurrenceDto |
+| `src/reminder/enums/` | ReminderCadence, ReminderOccurrenceStatus enums |
 | `src/reminder/` | Reminder definition CRUD, recurrence logic, and occurrence state handling |
 | `src/database/migrations/` | Includes delimiter and reminder schema migrations |
 
@@ -1190,6 +1212,7 @@ Reminder occurrence computation should be performed only for the requested windo
 | `src/app/pages/runs/start-run/start-run.component.ts` | `extractVariables()` with dynamic delimiters and pipe stripping |
 | `src/app/pages/today/today.component.ts` | Displays runs, todos, and reminder occurrences |
 | `src/app/pages/reminders/` | Reminder management list and editor flows |
+| `src/app/services/reminders-api.service.ts` | HTTP client for reminder CRUD, agenda, and occurrence actions |
 | `src/app/components/nav/nav.component.ts` | Navigation entry for Reminders |
 
 ---
@@ -1199,9 +1222,9 @@ Reminder occurrence computation should be performed only for the requested windo
 The system consists of:
 
 ```
-7 database tables
-25 REST endpoints
-5 UI pages
+9 database tables
+32 REST endpoints
+6 UI pages
 Guided dashboard workflow
 Template-based runbooks with variables
   - Configurable delimiters per template (default: {{ / }})

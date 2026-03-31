@@ -5,14 +5,14 @@ Introduce a first-class reminder/schedule feature instead of extending todos. A 
 **Tightened Data Model**
 - `reminder_definition`
   Fields:
-  `id` INTEGER PK, `title` TEXT NOT NULL, `description` TEXT NULL, `category` TEXT NULL, `cadence` TEXT NOT NULL (`ONCE` | `DAILY` | `WEEKLY`), `interval` INTEGER NOT NULL DEFAULT 1, `anchor_date` DATE NOT NULL, `weekdays` TEXT NULL (JSON array of weekday numbers 0-6), `time_of_day` TEXT NULL (`HH:mm`), `lead_time_days` INTEGER NOT NULL DEFAULT 0, `linked_template_id` INTEGER NULL FK -> `template.id`, `active` BOOLEAN NOT NULL DEFAULT TRUE, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `updated_at` DATETIME NULL.
+  `id` INTEGER PK, `title` TEXT NOT NULL, `description` TEXT NULL, `category` TEXT NULL (free-text, max 50 chars), `cadence` TEXT NOT NULL (`ONCE` | `DAILY` | `WEEKLY`), `interval` INTEGER NOT NULL DEFAULT 1 (min 1, max 52), `anchor_date` TEXT NOT NULL (stored as `YYYY-MM-DD` text in SQLite, typed as `string` in entity, validated as `@IsDateString()` at DTO level — local scheduling date, not UTC timestamp), `weekdays` TEXT NULL (JSON array of weekday numbers 0-6; use TypeORM JSON transformer matching `instance.variables` pattern), `time_of_day` TEXT NULL (`HH:mm`), `lead_time_days` INTEGER NOT NULL DEFAULT 0 (min 0, max 365), `linked_template_id` INTEGER NULL FK -> `template.id`, `active` BOOLEAN NOT NULL DEFAULT TRUE, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `updated_at` DATETIME NULL.
   Rules:
-  use `DATE` for schedule anchors and occurrences because the core requirement is day-based advance notice; keep `time_of_day` optional and separate. `ONCE` ignores `weekdays` and uses `anchor_date` as the occurrence date. `DAILY` ignores `weekdays`. `WEEKLY` requires at least one weekday and uses `interval` for weekly vs biweekly cadence (`1` = weekly, `2` = every other week). `lead_time_days` must be >= 0. `linked_template_id` is optional and there is no `linked_todo_id` in v1 because todos remain one-off tasks.
+  use `TEXT` for schedule anchors and occurrences because SQLite has no native `DATE` type; the core requirement is day-based advance notice; keep `time_of_day` optional and separate. `ONCE` ignores `weekdays` and uses `anchor_date` as the occurrence date. `DAILY` ignores `weekdays`. `WEEKLY` requires at least one weekday and uses `interval` for weekly vs biweekly cadence (`1` = weekly, `2` = every other week). `lead_time_days` must be >= 0. `linked_template_id` is optional and there is no `linked_todo_id` in v1 because todos remain one-off tasks.
 - `reminder_occurrence_state`
   Fields:
-  `id` INTEGER PK, `reminder_id` INTEGER NOT NULL FK -> `reminder_definition.id`, `occurrence_date` DATE NOT NULL, `status` TEXT NOT NULL (`COMPLETED` | `DISMISSED`), `acted_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP.
+  `id` INTEGER PK, `reminder_id` INTEGER NOT NULL FK -> `reminder_definition.id` ON DELETE CASCADE, `occurrence_date` TEXT NOT NULL (stored as `YYYY-MM-DD` text, typed as `string` in entity), `status` TEXT NOT NULL (`COMPLETED` | `DISMISSED`), `acted_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP.
   Rules:
-  add a unique constraint on (`reminder_id`, `occurrence_date`). Absence of a row means the occurrence is still open. This keeps the database small and avoids persisting generated occurrences that were never acted on.
+  add a unique constraint on (`reminder_id`, `occurrence_date`). Absence of a row means the occurrence is still open. This keeps the database small and avoids persisting generated occurrences that were never acted on. `ON DELETE CASCADE` removes occurrence state rows when a reminder definition is deleted, matching the cascade pattern for `template_step` and `instance_step`.
 - Indexes
   Add an index on `reminder_definition.active`, an index on `reminder_definition.linked_template_id`, and a composite index on `reminder_occurrence_state(reminder_id, occurrence_date)`.
 
@@ -36,7 +36,7 @@ Introduce a first-class reminder/schedule feature instead of extending todos. A 
    Purpose: remove a reminder definition and its occurrence state rows.
 6. `GET /api/reminders/agenda?from=YYYY-MM-DD&to=YYYY-MM-DD`
    Purpose: return computed reminder occurrences for a date window.
-   Response shape: occurrence projections containing `reminderId`, `title`, `category`, `occurrenceDate`, `prepStartDate`, `timeOfDay`, `status` (`OPEN` | `COMPLETED` | `DISMISSED`), `linkedTemplate` summary, and `canStartRun`.
+   Response shape: occurrence projections containing `reminderId`, `title`, `description`, `category`, `occurrenceDate`, `prepStartDate`, `timeOfDay`, `status` (`OPEN` | `COMPLETED` | `DISMISSED`), `isInPrepWindow`, `isOverdue`, `daysUntilOccurrence`, `linkedTemplate` summary, and `canStartRun`. Derived fields (`isInPrepWindow`, `isOverdue`, `daysUntilOccurrence`) are computed on the backend based on the server's current date at response time.
 7. `PATCH /api/reminders/{id}/occurrences/{occurrenceDate}`
    Purpose: record user action for one occurrence.
    Body shape: `status` where `status` is `COMPLETED`, `DISMISSED`, or `OPEN`.
@@ -44,7 +44,7 @@ Introduce a first-class reminder/schedule feature instead of extending todos. A 
 8. `GET /api/dashboard?upcomingDays=7`
    Purpose: preserve the Today endpoint while extending it for reminders.
    Response shape: existing `runs` and `todos`, plus `reminders: { dueNow: ReminderAgendaItem[], upcoming: ReminderAgendaItem[] }`.
-   Semantics: `dueNow` means occurrences whose prep window has started and that are still open. `upcoming` means the next occurrences within the horizon whose prep window has not started yet.
+   Semantics: `dueNow` means occurrences where `today >= prepStartDate` (prep window has started) and still open. `upcoming` means occurrences where `today < prepStartDate` and `occurrenceDate <= today + upcomingDays`. `prepStartDate` is always `occurrenceDate - leadTimeDays`. `upcomingDays` is optional (default 7, min 1, max 30) and controls only the reminder upcoming window; runs and todos remain unfiltered. When `upcomingDays` is `0`, the `upcoming` array is empty.
 
 **Recommended DTO Shapes**
 - `CreateReminderDto`
@@ -78,7 +78,7 @@ Introduce a first-class reminder/schedule feature instead of extending todos. A 
    `id: 13, title: 'Sprint retrospective', category: 'SPRINT_RETRO', cadence: 'WEEKLY', interval: 2, anchorDate: '2026-04-03', weekdays: [5], timeOfDay: null, leadTimeDays: 2, linkedTemplateId: 7, active: true, nextOccurrenceDate: '2026-04-03', nextPrepStartDate: '2026-04-01', lastCompletedOccurrenceDate: null`
 4. `GET /api/reminders/agenda?from=2026-03-31&to=2026-04-10`
    Example response item:
-   `reminderId: 13, title: 'Sprint retrospective', category: 'SPRINT_RETRO', occurrenceDate: '2026-04-03', prepStartDate: '2026-04-01', timeOfDay: null, status: 'OPEN', isVisibleToday: false, isInPrepWindow: false, linkedTemplate: { id: 7, name: 'Sprint Retro Template' }, canStartRun: true`
+   `reminderId: 13, title: 'Sprint retrospective', category: 'SPRINT_RETRO', occurrenceDate: '2026-04-03', prepStartDate: '2026-04-01', timeOfDay: null, status: 'OPEN', isInPrepWindow: false, isOverdue: false, daysUntilOccurrence: 3, linkedTemplate: { id: 7, name: 'Sprint Retro Template' }, canStartRun: true`
 5. `PATCH /api/reminders/13/occurrences/2026-04-03`
    Example request:
    `status: 'COMPLETED'`
@@ -90,9 +90,9 @@ Introduce a first-class reminder/schedule feature instead of extending todos. A 
 
 **Validation Rules And Edge Cases**
 1. Common validation
-   `title` required, trimmed, max 200 chars. `description` optional, max 4000 chars. `category` optional, max 50 chars or use a constrained enum if you want stricter preset handling. `leadTimeDays` integer >= 0 and <= 365. `timeOfDay`, when present, must be `HH:mm` 24-hour format.
+   `title` required, trimmed, max 200 chars. `description` optional, max 4000 chars. `category` optional, free-text, max 50 chars; use distinct-value queries for filter dropdowns rather than a constrained enum. `leadTimeDays` integer >= 0 and <= 365. `interval` integer >= 1 and <= 52 (weekly * 52 = yearly practical limit). `timeOfDay`, when present, must be `HH:mm` 24-hour format.
 2. `anchorDate`
-   Required for every reminder. Stored as local scheduling date rather than UTC timestamp. For weekly reminders it is the cadence anchor used to determine interval boundaries, not necessarily the only weekday that can occur.
+   Required for every reminder. Stored as `TEXT` in SQLite (`YYYY-MM-DD` format), typed as `string` in the entity, validated as `@IsDateString()` at the DTO level. It is a local scheduling date rather than UTC timestamp. For weekly reminders it is the cadence anchor used to determine interval boundaries, not necessarily the only weekday that can occur.
 3. `cadence = ONCE`
    `interval` must be `1`. `weekdays` must be absent or empty. The only valid occurrence is `anchorDate`. If the occurrence is in the past and open, the agenda should still return it when the requested window includes that past date; the dashboard may choose to omit stale past reminders after a retention threshold, but v1 can simply keep them visible if they are in the prep window and not acted on.
 4. `cadence = DAILY`
@@ -100,11 +100,11 @@ Introduce a first-class reminder/schedule feature instead of extending todos. A 
 5. `cadence = WEEKLY`
    `interval` must be >= 1. `weekdays` is required, must contain unique values in the range `0-6`, and should be normalized into ascending order. Weekly means every `interval` weeks on the given weekdays, anchored from the week containing `anchorDate`. Biweekly is represented as `interval = 2`.
 6. Template links
-   If `linkedTemplateId` is provided, the API must verify that the template exists. Deleting a template should be blocked while linked reminders exist or should null the link explicitly; choose one policy and keep it consistent. Recommended policy: block deletion to avoid silent reminder degradation.
+   If `linkedTemplateId` is provided, the API must verify that the template exists. `DELETE /api/templates/{id}` returns `409 Conflict` if any active reminder definitions reference the template via `linkedTemplateId`. The error message should identify the blocking reminders. This prevents silent reminder degradation.
 7. Occurrence action validation
-   `occurrenceDate` path param must be a valid `YYYY-MM-DD` date and must align with a real computed occurrence for that reminder. Reject actions against non-occurrence dates with `400`. Repeating the same `COMPLETED` or `DISMISSED` action should be idempotent.
+   `occurrenceDate` path param must be a valid `YYYY-MM-DD` date and must align with a real computed occurrence for that reminder. The handler must compute the occurrence schedule for the given reminder and verify the date is a valid occurrence. Reject actions against non-occurrence dates with `400`. Repeating the same `COMPLETED` or `DISMISSED` action should be idempotent.
 8. Agenda window validation
-   `from` and `to` are required for `/reminders/agenda`. Reject `from > to`. Cap the allowed window to 90 days so the recurrence engine cannot be asked for arbitrarily large ranges. For `/dashboard`, default `upcomingDays = 7`, minimum `1`, maximum `30`.
+   `from` and `to` are required for `/reminders/agenda`. Reject `from > to`. Cap the allowed window to 90 days so the recurrence engine cannot be asked for arbitrarily large ranges. The recurrence engine must short-circuit once it exceeds the window end date rather than precomputing all possible occurrences then filtering. For `/dashboard`, default `upcomingDays = 7`, minimum `1`, maximum `30`.
 9. Duplicate semantics
    Two reminder definitions may share the same title and schedule; do not enforce cross-row uniqueness. The uniqueness boundary is occurrence state per reminder definition.
 10. Time and timezone edge case
@@ -117,11 +117,12 @@ Introduce a first-class reminder/schedule feature instead of extending todos. A 
 **Frontend Payload Shapes**
 1. Today dashboard reminder item
    `ReminderAgendaItem`: `reminderId`, `title`, `description`, `category`, `occurrenceDate`, `prepStartDate`, `timeOfDay`, `status`, `isInPrepWindow`, `isOverdue`, `daysUntilOccurrence`, `linkedTemplate`, `canStartRun`
+   Derived fields (`isInPrepWindow`, `isOverdue`, `daysUntilOccurrence`) are computed on the backend based on the server's current date at response time.
    Use this in [checklist-execution-system-ui/src/app/pages/today/today.component.ts](checklist-execution-system-ui/src/app/pages/today/today.component.ts) so the UI does not need to recompute date semantics.
 2. Today dashboard response
    Keep existing `runs` and `todos` and add:
    `reminders: { dueNow: ReminderAgendaItem[], upcoming: ReminderAgendaItem[] }`
-   `dueNow` should already exclude completed or dismissed occurrences. `upcoming` should include only future occurrences inside the requested horizon whose prep window has not started yet.
+   `dueNow` should already exclude completed or dismissed occurrences. `upcoming` should include only future occurrences where `today < prepStartDate` and `occurrenceDate <= today + upcomingDays`. When `upcomingDays` is `0`, the `upcoming` array is empty.
 3. Reminder management list item
    `ReminderListItem`: `id`, `title`, `description`, `category`, `cadence`, `interval`, `anchorDate`, `weekdays`, `timeOfDay`, `leadTimeDays`, `linkedTemplateId`, `linkedTemplateName`, `active`, `nextOccurrenceDate`, `nextPrepStartDate`, `lastCompletedOccurrenceDate`
    This supports the top-level Reminders page table or card list without an extra per-row lookup.
@@ -142,8 +143,8 @@ Introduce a first-class reminder/schedule feature instead of extending todos. A 
    `category: string | null`
    `cadence: ReminderCadence`
    `interval: number`
-   `anchorDate: string`
-   `weekdays: string | null` as stored JSON text in SQLite
+   `anchorDate: string` (stored as TEXT `YYYY-MM-DD` in SQLite, not a Date object)
+   `weekdays: string | null` as stored JSON text in SQLite; use a TypeORM JSON transformer (serialize array to/from TEXT) matching the `instance.variables` pattern
    `timeOfDay: string | null`
    `leadTimeDays: number`
    `linkedTemplateId: number | null`
@@ -154,7 +155,7 @@ Introduce a first-class reminder/schedule feature instead of extending todos. A 
 3. Reminder occurrence state entity fields
    `id: number`
    `reminderId: number`
-   `occurrenceDate: string`
+   `occurrenceDate: string` (stored as TEXT `YYYY-MM-DD` in SQLite)
    `status: ReminderOccurrenceStatus`
    `actedAt: Date`
    Include a `ManyToOne` back to the reminder definition.
@@ -174,9 +175,9 @@ Introduce a first-class reminder/schedule feature instead of extending todos. A 
 6. Controller shape
    Add a dedicated reminders controller using the same conventions as [checklist-execution-system-api/src/todo/todos.controller.ts](checklist-execution-system-api/src/todo/todos.controller.ts) and [checklist-execution-system-api/src/instance/instances.controller.ts](checklist-execution-system-api/src/instance/instances.controller.ts): `GET`, `POST`, `PUT`, `DELETE`, and `PATCH` with `ParseIntPipe` for ids. Declare `GET agenda` before `GET :id`.
 7. Service split
-   Keep CRUD logic for reminder definitions in one service and recurrence projection logic in either the same service or a dedicated pure helper service. The dashboard service should depend on the reminder service for occurrence projections rather than duplicating recurrence logic.
+   Keep CRUD logic for reminder definitions in one service. Implement recurrence projection logic in a dedicated pure utility module (`src/reminder/recurrence.utils.ts`) as exported functions with no `@Injectable()` decorator and no database access. This makes recurrence computation independently unit-testable without TestBed or mocks. The service calls these utils and overlays occurrence state from the database. The dashboard service should depend on the reminder service for occurrence projections rather than duplicating recurrence logic.
 8. API response models
-   Return plain JSON objects rather than exposing entity internals directly where derived fields are involved. Definition list responses should add `nextOccurrenceDate`, `nextPrepStartDate`, and `lastCompletedOccurrenceDate`. Agenda responses should return occurrence projection items with derived booleans already computed.
+   Return plain JSON objects rather than exposing entity internals directly where derived fields are involved. Definition list responses should add `nextOccurrenceDate`, `nextPrepStartDate`, `lastCompletedOccurrenceDate`, `createdAt`, and `updatedAt`. The `lastCompletedOccurrenceDate` field should be computed with a single query using `MAX(occurrence_date) WHERE status = 'COMPLETED' GROUP BY reminder_id` to avoid N+1 lookups. Agenda responses should return occurrence projection items with derived booleans already computed on the backend based on the server's current date at response time.
 
 **Reminder UX And Form Behavior**
 1. Top-level page purpose
@@ -219,7 +220,7 @@ Introduce a first-class reminder/schedule feature instead of extending todos. A 
 5. UX design
    Add a Reminders page and update the Today dashboard section to show reminder occurrences in prep windows and upcoming occurrences.
 6. Final system summary
-   Increase the count of functional areas and endpoint inventory accordingly. Note that reminders are app-delivered in v1 and that linked templates surface a `Start run` action rather than scheduled instance creation.
+   Increase the count of functional areas and endpoint inventory accordingly. Update to 9 database tables, ~32 REST endpoints, and 6 UI pages. Note that reminders are app-delivered in v1 and that linked templates surface a `Start run` action rather than scheduled instance creation.
 7. Future enhancements
    Move external notifications, timezone-aware delivery, calendar sync, and a possible Sprint aggregate into future enhancements instead of leaving them implicit.
 
@@ -230,7 +231,7 @@ Introduce a first-class reminder/schedule feature instead of extending todos. A 
 **Steps**
 1. Confirm v1 scope and semantics: recurring reminder definitions, advance notice in days, manual sprint schedule setup, and optional template links are included. External notifications, calendar sync, auto-created runs, and a dedicated Sprint aggregate are excluded from the first implementation. This blocks schema and API design.
 2. Add a reminder domain to the API. Create a new module/entity/controller/service for reminder definitions and a second table for per-occurrence state. Reminder fields should cover title, description, category, recurrence type, anchor date, optional weekday config, optional time, lead time days, optional templateId, and active flag. Occurrence state should capture reminderId, occurrenceDate, status, completedAt, and dismissedAt. Depends on step 1.
-3. Implement recurrence calculation as a pure API service. It should compute occurrences for a requested date window and determine visibility using occurrenceDate minus leadTimeDays. Support once, daily, weekly, biweekly, and weekly day-of-week variants. Keep the logic deterministic and unit-testable. Depends on step 2.
+3. Implement recurrence calculation as pure utility functions in `src/reminder/recurrence.utils.ts` (no `@Injectable()` decorator, no database access). It should compute occurrences for a requested date window and determine visibility using occurrenceDate minus leadTimeDays. Support once, daily, weekly, biweekly, and weekly day-of-week variants. Keep the logic deterministic and unit-testable without TestBed or mocks. Depends on step 2.
 4. Extend dashboard and reminder APIs. Update the dashboard payload to return active reminders that are already in their prep window and upcoming reminders for the next 7-14 days. Add reminder CRUD plus occurrence actions such as complete or dismiss for a specific occurrence date. Do not auto-create instances; instead include linked template metadata so the UI can offer Start run when appropriate. Depends on steps 2 and 3.
 5. Add migrations and application wiring. Register the new entities and module in AppModule, add database migrations, and index reminder activity queries and occurrence state lookups. Preserve backward compatibility for existing templates, runs, and todos. Parallel with step 3 after entity shapes stabilize; blocks verification.
 6. Add frontend reminder models and API services. Extend api models, augment dashboard fetching, and add a dedicated reminders API service. Keep recurring reminder types separate from Todo so recurring occurrence semantics stay isolated from one-off task semantics. Depends on step 4.
@@ -242,12 +243,21 @@ Introduce a first-class reminder/schedule feature instead of extending todos. A 
 **Relevant files**
 - c:\Code\rob-bl8ke\checklist-execution-system-api\src\app.module.ts — register the new reminder entities/module alongside Template, Instance, and Todo modules.
 - c:\Code\rob-bl8ke\checklist-execution-system-api\src\dashboard\dashboard.service.ts — extend getToday() so the dashboard returns active and upcoming reminders in addition to runs and todos.
-- c:\Code\rob-bl8ke\checklist-execution-system-api\src\dashboard\dashboard.controller.ts — keep the dashboard contract aligned with the expanded payload.
+- c:\Code\rob-bl8ke\checklist-execution-system-api\src\dashboard\dashboard.controller.ts — add `@Query('upcomingDays')` parameter with `DefaultValuePipe` and validation; keep the dashboard contract aligned with the expanded payload.
+- c:\Code\rob-bl8ke\checklist-execution-system-api\src\template\templates.service.ts — update `remove()` to check for linked reminder definitions and throw `ConflictException` if any active reminders reference the template.
 - c:\Code\rob-bl8ke\checklist-execution-system-api\src\todo\todo.entity.ts — preserve as the one-off task model; use as a boundary reference rather than extending it with recurring occurrence semantics.
+- c:\Code\rob-bl8ke\checklist-execution-system-api\src\reminder\reminder-definition.entity.ts — reminder definition entity with schedule columns, weekdays JSON transformer, anchorDate as string.
+- c:\Code\rob-bl8ke\checklist-execution-system-api\src\reminder\reminder-occurrence-state.entity.ts — per-occurrence state entity with CASCADE delete on reminder FK.
+- c:\Code\rob-bl8ke\checklist-execution-system-api\src\reminder\reminders.controller.ts — reminder CRUD, agenda, and occurrence state endpoints; declare `GET agenda` before `GET :id`.
+- c:\Code\rob-bl8ke\checklist-execution-system-api\src\reminder\reminders.service.ts — reminder CRUD, occurrence state, derived field computation; uses recurrence utils.
+- c:\Code\rob-bl8ke\checklist-execution-system-api\src\reminder\recurrence.utils.ts — pure functions for computing occurrence dates (no DI); independently unit-testable.
+- c:\Code\rob-bl8ke\checklist-execution-system-api\src\reminder\dto\ — CreateReminderDto, UpdateReminderDto, UpdateReminderOccurrenceDto.
+- c:\Code\rob-bl8ke\checklist-execution-system-api\src\reminder\enums\ — ReminderCadence, ReminderOccurrenceStatus enums.
 - c:\Code\rob-bl8ke\checklist-execution-system-ui\src\app\models\api.models.ts — add reminder definition types, occurrence state, and expanded dashboard response models.
+- c:\Code\rob-bl8ke\checklist-execution-system-ui\src\app\services\reminders-api.service.ts — HTTP client for reminder CRUD, agenda, and occurrence actions.
 - c:\Code\rob-bl8ke\checklist-execution-system-ui\src\app\pages\today\today.component.ts — add reminder sections and actions to the dashboard entrypoint.
+- c:\Code\rob-bl8ke\checklist-execution-system-ui\src\app\pages\reminders\ — reminder management list and editor flows.
 - c:\Code\rob-bl8ke\checklist-execution-system-ui\src\app\pages\todos\todo-list\todo-list.component.ts — reference as the current one-off todo interaction pattern; do not turn it into the recurring reminder editor.
-- c:\Code\rob-bl8ke\checklist-execution-system-ui\src\app\pages\templates\template-editor\template-editor.component.ts — possible future link surface for reminder presets tied to templates; not required for the initial management UI.
 - c:\Code\rob-bl8ke\checklist-execution-system-planning\docs\current-spec.md — update concepts, API, and UX sections once the approach is approved.
 
 **Verification**
