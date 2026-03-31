@@ -34,7 +34,8 @@ A single-user **Runbook + Todo manager** for engineers performing repeatable ope
 **Key design decisions:**
 - Single-user, local-first — no auth
 - Steps are **copied** from templates into runs at start time; editing a template doesn't affect active runs
-- Variables in step instructions use `{{variable}}` syntax, substituted at run creation
+- Variables in step instructions use `{{variable}}` syntax by default; templates may configure custom delimiters to avoid collisions with Helm, Terraform, Mustache, etc.
+- Variable placeholders support pipe transforms: `{{version | replace(".", "_")}}` — applied at run creation
 - Instance status: `IN_PROGRESS` → `COMPLETED` (auto when all steps done) or `ABANDONED`
 
 ---
@@ -91,5 +92,9 @@ For a faster dev loop, run the backend and frontend separately. See each repo's 
 
 ## Planning Docs
 
-- [`docs/full-spec.md`](docs/full-spec.md) — Original product specification
-- [`docs/spec-plan.md`](docs/spec-plan.md) — Phased implementation plan with task breakdown
+- [`docs/current-spec.md`](docs/current-spec.md) — Current product specification (reflects all implemented features)
+- [`docs/initial-spec.md`](docs/initial-spec.md) — Original product specification (pre-variable enhancements)
+- [`docs/variable-enhancements-plan.md`](docs/variable-enhancements-plan.md) — Design decisions and phase breakdown for custom delimiters + pipe transforms
+- [`docs/variable-enhancements-task-list.md`](docs/variable-enhancements-task-list.md) — Detailed task list for variable enhancement phases
+- [`docs/initial-plan.md`](docs/initial-plan.md) — Original phased implementation plan
+- [`docs/proposed-docker-plan.md`](docs/proposed-docker-plan.md) — Docker Compose setup plan
