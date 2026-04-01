@@ -131,7 +131,20 @@ Write Kafka article
 Fix CI pipeline
 ```
 
-Todos remain intentionally simple and do not carry recurring schedule semantics in v1.
+Each todo contains:
+
+```
+title
+optional markdown detail
+optional due date
+priority
+completion state
+timestamps
+```
+
+The optional markdown detail is stored in the existing `description` field at the API/database layer and rendered as markdown in the UI. Due dates are local date-only values (`YYYY-MM-DD`). Priorities are `LOW`, `NORMAL`, `HIGH`, or `CRITICAL`.
+
+Todos remain one-off tasks in v1 and do not carry recurring schedule semantics, but they are no longer limited to plain title-only entries. They can be edited after creation, incomplete items are ordered for execution by due date and priority, and completed items remain visible at the bottom of the Todos page for reference.
 
 ---
 
@@ -336,12 +349,22 @@ CREATE TABLE todo (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
     description TEXT,
+  due_date TEXT,
+  priority TEXT NOT NULL DEFAULT 'NORMAL',
 
     completed BOOLEAN DEFAULT FALSE,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     completed_at DATETIME
 );
 ```
+
+Rules:
+
+* `description` stores the optional markdown detail displayed on expanded Todo items
+* `due_date` is stored as `TEXT` in SQLite (`YYYY-MM-DD` format), typed as `string` in the entity, and validated as `@IsDateString()` at the DTO level; it is a local scheduling date, not a UTC timestamp
+* `priority` is one of `LOW`, `NORMAL`, `HIGH`, or `CRITICAL`
+* `priority` defaults to `NORMAL`
+* completed Todos remain persisted and visible on the Todos page, but sort after incomplete items
 
 ---
 
@@ -691,6 +714,32 @@ instance.next_step_id
 GET /api/todos
 ```
 
+Returns all Todos ordered for execution:
+
+* incomplete Todos first
+* incomplete Todos with a `dueDate` ordered ascending
+* incomplete Todos with no `dueDate` after dated incomplete Todos
+* then by priority `CRITICAL`, `HIGH`, `NORMAL`, `LOW`
+* then by `createdAt` descending
+* completed Todos at the bottom ordered by `completedAt` descending
+
+Response
+
+```json
+[
+  {
+    "id": 3,
+    "title": "Upgrade IntelliJ",
+    "description": "Review [release notes](https://www.jetbrains.com/idea/)",
+    "dueDate": "2026-04-01",
+    "priority": "CRITICAL",
+    "completed": false,
+    "createdAt": "2026-03-29T19:25:00.000Z",
+    "completedAt": null
+  }
+]
+```
+
 ---
 
 ### Create Todo
@@ -699,6 +748,32 @@ GET /api/todos
 POST /api/todos
 ```
 
+Body
+
+```json
+{
+  "title": "Upgrade IntelliJ",
+  "description": "Review [release notes](https://www.jetbrains.com/idea/) and verify plugin compatibility",
+  "dueDate": "2026-04-01",
+  "priority": "HIGH"
+}
+```
+
+Supported request fields:
+
+```
+title
+description?
+dueDate?
+priority?
+```
+
+Rules:
+
+* `description` is optional markdown detail
+* `dueDate` is optional and uses local date-only format `YYYY-MM-DD`
+* `priority` is optional and defaults to `NORMAL`
+
 ---
 
 ### Update Todo
@@ -706,6 +781,35 @@ POST /api/todos
 ```
 PATCH /api/todos/{id}
 ```
+
+Body
+
+```json
+{
+  "title": "Upgrade IntelliJ IDEA",
+  "description": "Review [release notes](https://www.jetbrains.com/idea/) before upgrading",
+  "dueDate": "2026-04-03",
+  "priority": "CRITICAL",
+  "completed": false
+}
+```
+
+Supported request fields:
+
+```
+title?
+description?
+dueDate?
+priority?
+completed?
+```
+
+Rules:
+
+* omitted fields remain unchanged
+* `description: null` clears the markdown detail
+* `dueDate: null` clears the due date
+* this endpoint is used for editing existing Todos after creation as well as completion toggles
 
 ---
 
@@ -871,7 +975,7 @@ OPEN
 GET /api/dashboard?upcomingDays=7
 ```
 
-`upcomingDays` is optional (default `7`, minimum `1`, maximum `30`). It controls only the reminder upcoming window; runs and todos remain unfiltered.
+`upcomingDays` is optional (default `7`, minimum `1`, maximum `30`). It controls only the reminder upcoming window; runs remain unfiltered, and the Todo portion contains only incomplete items.
 
 Response includes:
 
@@ -887,6 +991,7 @@ Semantics:
 * `dueNow` contains open reminder occurrences where `today >= prepStartDate` (i.e. the prep window has started) and the occurrence is still `OPEN`
 * `upcoming` contains future reminder occurrences where `today < prepStartDate` and `occurrenceDate <= today + upcomingDays`
 * `prepStartDate` is always `occurrenceDate - leadTimeDays`
+* `todos` contains only incomplete Todos and preserves the same due-date and priority ordering used by `GET /api/todos` after completed items are removed
 * When `upcomingDays` is `0`, the `upcoming` array is empty
 
 ---
@@ -922,7 +1027,7 @@ Reminder occurrences coming up soon
 +
 Next step of each active runbook
 +
-Todos
+Incomplete todos
 ```
 
 Example:
@@ -950,11 +1055,18 @@ mvn clean package
 
 --------------------------------
 
-☐ Upgrade IntelliJ
-☐ Write Kafka article
+[CRITICAL] Upgrade IntelliJ
+Due 2026-04-01 (overdue)
+[Done]
+
+[NORMAL] Write Kafka article
+Due 2026-04-05
+[Done]
 ```
 
 Reminder occurrences are shown as occurrence-based items rather than raw schedule definitions.
+
+Todo items on Today are a quick-action surface only. They show title, due date, overdue state, and compact priority cues, and allow marking complete. They do not expand markdown detail or expose edit controls in this view.
 
 ---
 
@@ -1056,14 +1168,39 @@ code blocks
 ```
 Master Todo
 
-[Add Todo...]
+[Create Todo]
 
-[ ] Upgrade IntelliJ
-[ ] Write Kafka article
-[✔] Fix CI pipeline
+[CRITICAL] Upgrade IntelliJ    Due 2026-04-01    Overdue    [Expand] [Edit] [Delete]
+[HIGH] Write Kafka article     Due 2026-04-05              [Expand] [Edit] [Delete]
+[✔] Fix CI pipeline            Completed 2026-03-30       [Expand] [Edit] [Delete]
 ```
 
-Todos remain one-off tasks and do not double as reminder definitions.
+Expanded Todo view:
+
+```markdown
+Review [release notes](https://www.jetbrains.com/idea/)
+
+- Verify plugin compatibility
+- Capture any breaking changes
+```
+
+Todo editor:
+
+```
+Title
+Detail (Markdown)
+Due Date
+Priority
+Live Preview
+```
+
+Behavior:
+
+* the same modal editor is used for both creating and editing Todos
+* Todos with markdown detail can be expanded inline on the Todos page to render the stored markdown
+* overdue incomplete Todos are visually highlighted
+* incomplete Todos are sorted by due date, then priority, then newest; completed Todos remain visible at the bottom
+* Todos remain one-off tasks and do not double as reminder definitions
 
 ---
 
@@ -1115,7 +1252,7 @@ Ceremony presets such as backlog refinement, retrospective, and sprint planning 
 
 # 8. Markdown Rendering
 
-Markdown stored in step instructions.
+Markdown is stored in step instructions and optional Todo detail.
 
 Use frontend library:
 
@@ -1130,6 +1267,8 @@ Each code block includes:
 ```
 [Copy]
 ```
+
+Todo detail markdown is rendered on expanded Todo items and previewed in the create/edit Todo modal.
 
 ---
 
@@ -1173,6 +1312,8 @@ occurrence-state overlay on computed occurrences
 
 Reminder occurrence computation should be performed only for the requested window, with reasonable bounds such as 7 to 30 days for the dashboard and up to 90 days for agenda queries. The recurrence engine must short-circuit once it exceeds the window end date rather than precomputing all possible occurrences then filtering.
 
+Todo ordering should be applied at the API layer so the Todos page and Today dashboard remain consistent. The query should sort by completion state, due-date presence, due date, priority rank, and recency rather than returning unsorted rows and relying on separate client-side ordering logic.
+
 The `lastCompletedOccurrenceDate` derived field on reminder list responses should be computed with a single query using `MAX(occurrence_date) WHERE status = 'COMPLETED' GROUP BY reminder_id` to avoid N+1 lookups.
 
 ---
@@ -1193,6 +1334,11 @@ The `lastCompletedOccurrenceDate` derived field on reminder list responses shoul
 | `src/instance/transform-pipeline.ts` | Parses `varName \| fn1 \| fn2(arg)` and evaluates chain |
 | `src/common/escape-regex.ts` | Escapes regex metacharacters in delimiter strings |
 | `src/dashboard/dashboard.service.ts` | Aggregates runs, todos, and reminder occurrences for Today |
+| `src/todo/todo.entity.ts` | Todo fields including markdown detail (`description`), due date, and priority |
+| `src/todo/dto/create-todo.dto.ts` | Todo create validation for markdown detail, due date, and priority |
+| `src/todo/dto/update-todo.dto.ts` | Todo edit validation, partial update semantics, and completion toggles |
+| `src/todo/enums/todo-priority.enum.ts` | Todo priority values and ranking |
+| `src/todo/todos.service.ts` | Todo CRUD, completion timestamps, and business ordering |
 | `src/reminder/reminder-definition.entity.ts` | Reminder definition entity with schedule columns |
 | `src/reminder/reminder-occurrence-state.entity.ts` | Per-occurrence state entity (COMPLETED/DISMISSED) |
 | `src/reminder/reminders.controller.ts` | Reminder CRUD, agenda, and occurrence state endpoints |
@@ -1207,10 +1353,12 @@ The `lastCompletedOccurrenceDate` derived field on reminder list responses shoul
 
 | File | Purpose |
 |---|---|
-| `src/app/models/api.models.ts` | Template, dashboard, and reminder API models |
+| `src/app/models/api.models.ts` | Template, todo, dashboard, and reminder API models |
 | `src/app/pages/templates/template-editor/` | Collapsible delimiter configuration UI |
+| `src/app/services/todos-api.service.ts` | HTTP client for todo CRUD and editing |
+| `src/app/pages/todos/todo-list/` | Todo list, expansion, ordering, and create/edit flows |
 | `src/app/pages/runs/start-run/start-run.component.ts` | `extractVariables()` with dynamic delimiters and pipe stripping |
-| `src/app/pages/today/today.component.ts` | Displays runs, todos, and reminder occurrences |
+| `src/app/pages/today/today.component.ts` | Displays runs, ordered incomplete todos, and reminder occurrences |
 | `src/app/pages/reminders/` | Reminder management list and editor flows |
 | `src/app/services/reminders-api.service.ts` | HTTP client for reminder CRUD, agenda, and occurrence actions |
 | `src/app/components/nav/nav.component.ts` | Navigation entry for Reminders |
@@ -1230,6 +1378,9 @@ Template-based runbooks with variables
   - Configurable delimiters per template (default: {{ / }})
   - Pipe transforms applied at render time (upper, lower, replace, default, etc.)
 Standalone todos
+  - Optional markdown detail rendered in the UI
+  - Optional due dates and priority-based ordering
+  - Create and edit flows for changing work over time
 Recurring and one-time reminders with advance notice
 Optional reminder links to templates for runbook-based preparation workflows
 ```
